@@ -1,0 +1,1887 @@
+<MvCOMMENT>
+***************
+*
+* Bread Pay Payment Module (www.breadfinancial.com)
+*
+***************
+*
+* Next error message: BREAD-ERROR-00034
+*
+***************
+*
+* REVISION HISTORY
+*
+* 10.11 - 02/21/24 - Integrate with core bread services
+* 10.10 - 11/30/23 - Update checkout domain
+* 10.09 - 11/01/23 - Add transaction type to order
+* 10.08 - 10/03/23 - Use correct shipping method for Bread modal
+* 10.07 - 09/08/23 - Add missing PaymentModule_Order_Head function
+* 10.06 - 06/08/23 - Add cart size filter toggle
+* 10.05 - 04/24/23 - Add min/max cart size and sku filter to db
+* 10.04 - 04/10/23 - Update autosettle to settlement_mode
+* 10.03 - 04/05/23 - Send shipping info to Bread
+* 10.02 - 04/03/23 - Add order_id to merchant portal
+* 10.01 - 04/03/23 - Add autosettle
+* 10.00 - 03/31/23 - updated for 2.0 infrastructure
+* 9.05 - 11/04/20 - add fields for two special programs; pass in customTotal variable
+* 9.04 - 04/28/20 - suppress phone if not 10 digits
+* 9.03 - 04/03/20 - removed dependency on jQuery and submission of form by assumed ID
+* 9.02 - 01/28/20 - added support for options and for discounts
+* 9.01 - 12/12/19 - changed comparison in PaymentModule_Runtime_Authorize to cast to int to avoid floating point issues
+* 9.00 - 10/09/17 - initial development
+*
+***************
+*
+* Copyright Bread Financial, 2023
+* All Rights Reserved
+*
+***************
+</MvCOMMENT>
+
+<MvFUNCTION NAME="Module_Description" PARAMETERS="module var" STANDARDOUTPUTLEVEL="">
+    <MvASSIGN NAME="l.module:code"        VALUE="breadpay">
+    <MvASSIGN NAME="l.module:name"        VALUE="Bread Pay">
+    <MvASSIGN NAME="l.module:provider"    VALUE="Bread Financial">
+    <MvASSIGN NAME="l.module:version"     VALUE="10.11">
+    <MvASSIGN NAME="l.module:api_ver"     VALUE="5.70">
+    <MvASSIGN NAME="l.module:description" VALUE="Offer financing options via Bread Pay (www.breadfinancial.com) as a payment module.">
+    <MvASSIGN NAME="l.module:features"    VALUE="payment, vis_payment, data_store, component, not_ordershpmnt, clientside, util">
+    <MvASSIGN NAME="l.module:helpurl"     VALUE="https://www.breadfinancial.com/">
+</MvFUNCTION>
+
+----------------------------------------------------------------------------------------------------------
+data_store feature
+----------------------------------------------------------------------------------------------------------
+
+<MvFUNCTION NAME="Module_Install_Store" PARAMETERS="module var" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="syntax, expression">
+    <MvCOMMENT> ---- Create database table to hold global options ---- </MvCOMMENT>
+    <MvQUERY NAME    = "Merchant"
+         QUERY    = "{ 'CREATE TABLE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global
+                            (
+                            production               ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(100) $ ',
+                            apikey                   ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(100) $ ',
+                            secretkey                ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(200) $ ',
+                            integrationkey           ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(200) $ ',
+                            sandboxapikey            ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(100) $ ',
+                            sandboxsecretkey         ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(200) $ ',
+                            sandboxintegrationkey    ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(200) $ ',
+                            settlement_mode          ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(200) $ ',
+							min_cart                 ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_NUMBER( 10, 2 ) $ ',
+							max_cart                 ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_NUMBER( 10, 2 ) $ ',
+                            cart_size_filter_enabled ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(200) $ ',
+							sku_filter_mode          ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_MEMO() $ ',
+							sku_filter               ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_MEMO() $ ',
+							last_sync_time           ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_NUMBER( 20, 2 ) $ '
+                                        )' }">
+    <MvIF EXPR="{ g.MvQUERY_Error }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00001', g.MvQUERY_Error ) }">
+    </MvIF>
+
+    <MvCOMMENT> ---- insert row ---- </MvCOMMENT>
+    <MvASSIGN NAME="l.options" MEMBER="production" VALUE="sandbox">
+    <MvASSIGN NAME="l.options" MEMBER="settlement_mode" VALUE="capture">
+    <MvASSIGN NAME="l.options" MEMBER="max_cart" VALUE=0>
+    <MvASSIGN NAME="l.options" MEMBER="min_cart" VALUE=0>
+    <MvASSIGN NAME="l.options" MEMBER="sku_filter_mode" VALUE="none">
+    <MvASSIGN NAME="l.options" MEMBER="cart_size_filter_enabled" VALUE="off">
+    <MvASSIGN NAME="l.options" MEMBER="last_sync_time" VALUE="s.time_t">
+    <MvQUERY NAME    = "Merchant"
+                     QUERY    = "{ 'INSERT INTO ' $ g.Store_Table_Prefix $ l.module:code $ '_Global(
+                                production,
+                                settlement_mode,
+                                max_cart,
+                                min_cart,
+                                sku_filter_mode,
+                                cart_size_filter_enabled)
+                                VALUES (?, ?, ?, ?, ?, ?) ' }"
+                     FIELDS="l.options:production, l.options:settlement_mode, l.options:max_cart, l.options:min_cart, l.options:sku_filter_mode, l.options:cart_size_filter_enabled">
+    <MvIF EXPR="{ g.MvQUERY_Error }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00001', g.MvQUERY_Error ) }">
+    </MvIF>
+
+	<MvIF EXPR = "{ NOT [ g.Module_Feature_TUI_DB ].Item_Load_Code( 'breadpay', l.item ) }">
+		<MvIF EXPR = "{ NOT [ g.Module_Feature_TUI_MGR ].TemplateManager_Create_Item( 'breadpay', l.module:code ) }">
+			<MvFUNCTIONRETURN VALUE = 0>
+		</MvIF>
+	</MvIF>
+    <MvFUNCRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="Module_Upgrade_Store" PARAMETERS="module var, version" STANDARDOUTPUTLEVEL="">
+	<MvIF EXPR="{ l.version LT 10.05 }">
+		<MvQUERY NAME="Merchant"
+				QUERY="{ 'ALTER TABLE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global ADD
+						(
+							min_cart        ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_NUMBER( 10, 2 ) $ ',
+							max_cart        ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_NUMBER( 10, 2 ) $ ',
+							sku_filter_mode ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_MEMO() $ ',
+							sku_filter      ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_MEMO() $ '
+						)' }">
+		<MvIF EXPR="{g.MvQUERY_Error}">
+			<MvFUNCTIONRETURN VALUE="{[ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00033', g.MvQUERY_Error )}">
+		</MvIF>
+
+        <MvASSIGN NAME="l.options" MEMBER="max_cart" VALUE=0>
+        <MvASSIGN NAME="l.options" MEMBER="min_cart" VALUE=0>
+        <MvASSIGN NAME="l.options" MEMBER="sku_filter_mode" VALUE="none">
+        <MvQUERY NAME    = "Merchant"
+                         QUERY    = "{ 'UPDATE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global SET (max_cart, min_cart, sku_filter_mode)
+                                     VALUES (?, ?, ?) ' }"
+                         FIELDS="l.options:max_cart, l.options:min_cart, l.options:sku_filter_mode">
+    </MvIF>
+
+	<MvIF EXPR="{ l.version LT 10.06 }">
+		<MvQUERY NAME="Merchant"
+				QUERY="{ 'ALTER TABLE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global ADD
+						(
+							cart_size_filter_enabled ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_CHAR(200) $ '
+						)' }">
+		<MvIF EXPR="{g.MvQUERY_Error}">
+			<MvFUNCTIONRETURN VALUE="{[ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00033', g.MvQUERY_Error )}">
+		</MvIF>
+
+        <MvASSIGN NAME="l.options" MEMBER="cart_size_filter_enabled" VALUE="off">
+        <MvQUERY NAME    = "Merchant"
+                         QUERY    = "{ 'UPDATE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global SET (cart_size_filter_enabled)
+                                     VALUES (?) ' }"
+                         FIELDS="l.options:cart_size_filter_enabled">
+    </MvIF>
+
+	<MvIF EXPR="{ l.version LT 10.11 }">
+		<MvQUERY NAME="Merchant"
+				QUERY="{ 'ALTER TABLE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global ADD
+						(
+							last_sync_time ' $ [ g.Module_Library_Native_DBAPI ].DB_Type_NUMBER( 20, 2 ) $ '
+						)' }">
+		<MvIF EXPR="{g.MvQUERY_Error}">
+			<MvFUNCTIONRETURN VALUE="{[ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00033', g.MvQUERY_Error )}">
+		</MvIF>
+
+        <MvASSIGN NAME="l.options" MEMBER="last_sync_time" VALUE="s.time_t">
+        <MvQUERY NAME    = "Merchant"
+                         QUERY    = "{ 'UPDATE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global SET (last_sync_time)
+                                     VALUES (?) ' }"
+                         FIELDS="l.options:last_sync_time">
+
+        <MvASSIGN NAME="l.save_settings_response" VALUE="{ bread_save_settings(module) }">
+        <MvIF EXPR="{ l.save_settings_response:success NE 'ok' }">
+            <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.save_settings_response }">
+            <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+            <MvFUNCRETURN VALUE="{ 0 }">
+        </MvIF>
+    </MvIF>
+    <MvFUNCTIONRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="Module_Uninstall_Store" PARAMETERS="module var" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT> ---- drop the tables ---- </MvCOMMENT>
+    <MvQUERY NAME="Merchant" QUERY="{ 'DROP TABLE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global' }">
+    <MvIF EXPR="{ g.MvQUERY_Error }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00006', g.MvQUERY_Error ) }">
+    </MvIF>
+	<MvIF EXPR = "{ [ g.Module_Feature_TUI_DB ].Item_Load_Code( 'breadpay', l.item ) }">
+		<MvASSIGN NAME = "l.null" VALUE = "{ [ g.Module_Feature_TUI_DB ].Item_Delete_ID( l.item:id ) }">
+	</MvIF>
+    <MvFUNCRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvCOMMENT>
+----------------------------------------------------------------------------------------------------------
+vis_payment feature
+----------------------------------------------------------------------------------------------------------
+</MvCOMMENT>
+
+<MvFUNCTION NAME="Module_Payment_Tabs" PARAMETERS="module var" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE="BREADFINANCIAL:Bread Pay">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="Module_Payment_Head" PARAMETERS="module var, tab" STANDARDOUTPUTLEVEL="text,html">
+    <MvCOMMENT>
+        TODO
+        API: 5.70
+        This function allows the module to output content in the HTML <head> tag of the Payment Settings
+        screen. It is useful for outputting CSS styles or external JavaScript references.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="Module_Payment_Content" PARAMETERS="module var, tab, load_fields" STANDARDOUTPUTLEVEL="text, html, compresswhitespace" ERROROUTPUTLEVEL="">
+    <MvIF EXPR="{ l.tab EQ 'BREADFINANCIAL' }">
+        <h1>Bread Pay Settings</h1>
+        <div id="bread_wrapper">
+            <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options)}">
+
+            <MvIF EXPR="{ g.BREAD_screen NE 1 }">
+                <MvASSIGN NAME="g.bread_production"               VALUE="{ l.options:production }">
+                <MvASSIGN NAME="g.bread_apikey"                   VALUE="{ l.options:apikey }">
+                <MvASSIGN NAME="g.bread_secretkey"                VALUE="{ l.options:secretkey }">
+                <MvASSIGN NAME="g.bread_integrationkey"           VALUE="{ l.options:integrationkey }">
+                <MvASSIGN NAME="g.bread_sandboxapikey"            VALUE="{ l.options:sandboxapikey }">
+                <MvASSIGN NAME="g.bread_sandboxsecretkey"         VALUE="{ l.options:sandboxsecretkey }">
+                <MvASSIGN NAME="g.bread_sandboxintegrationkey"    VALUE="{ l.options:sandboxintegrationkey }">
+                <MvASSIGN NAME="g.bread_settlement_mode"          VALUE="{ l.options:settlement_mode }">
+                <MvASSIGN NAME="g.bread_min_cart"                 VALUE="{ l.options:min_cart }">
+                <MvASSIGN NAME="g.bread_max_cart"                 VALUE="{ l.options:max_cart }">
+                <MvASSIGN NAME="g.bread_cart_size_filter_enabled" VALUE="{ l.options:cart_size_filter_enabled }">
+                <MvASSIGN NAME="g.bread_sku_filter"               VALUE="{ l.options:sku_filter }">
+                <MvASSIGN NAME="g.bread_sku_filter_mode"          VALUE="{ l.options:sku_filter_mode }">
+            </MvIF>
+
+            <input type="hidden" name="BREAD_screen" value="1">
+            <table border="0" cellpadding="2" cellspacing="0">
+                <tr><td colspan="2"><h2>Authentication</h2></td></tr>
+                <tr>
+                    <td nowrap valign="top">
+                        <b>Host:</b>
+                    </td>
+                    <td width="100%" valign="top">
+                        <select name="bread_production">
+                            <MvIF EXPR="{ g.bread_production EQ 'production' }">
+                                <option value="sandbox">Sandbox</option>
+                                <option value="production" selected>Production</option>
+                            <MvELSE>
+                                <option value="sandbox" selected>Sandbox</option>
+                                <option value="production">Production</option>
+                            </MvIF>
+                        </select>
+                    </td>
+                </tr>
+                <tr><td colspan="2">&nbsp;</td></tr>
+                <tr>
+                    <td nowrap>
+                        <b>API Key:</b>
+                    </td>
+                    <td width="100%">
+                        <input type="text" size="40" name="bread_apikey" value="{ encodeentities( g.bread_apikey ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap>
+                        <b>API Secret:</b>
+                    </td>
+                    <td width="100%">
+                        <input type="text" size="70" name="bread_secretkey" value="{ encodeentities( g.bread_secretkey ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap>
+                        <b>Integration Key:</b>
+                    </td>
+                    <td width="100%">
+                        <input type="text" size="40" name="bread_integrationkey" value="{ encodeentities( g.bread_integrationkey ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap>
+                        <b>Sandbox API Key:</b>
+                    </td>
+                    <td width="100%">
+                        <input type="text" size="40" name="bread_sandboxapikey" value="{ encodeentities( g.bread_sandboxapikey ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap>
+                        <b>Sandbox API Secret:</b>
+                    </td>
+                    <td width="100%">
+                        <input type="text" size="70" name="bread_sandboxsecretkey" value="{ encodeentities( g.bread_sandboxsecretkey ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap>
+                        <b>Sandbox Integration Key:</b>
+                    </td>
+                    <td width="100%">
+                        <input type="text" size="40" name="bread_sandboxintegrationkey" value="{ encodeentities( g.bread_sandboxintegrationkey ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr><td colspan="2"><hr><h2>Generic Settings</h2>
+                <p style="font-weight: 700;">Select settlement option.</p>
+                <p>Settlement indicates funds have been captured, and should be aligned with fulfillment of product. Once a transaction is settled, the customer's payment cycle begins and funds are en route to you via ACH to be received in 0+2 business days.  Installment loan orders must be settled within 90 days and SplitPay orders 14 days.</p>
+                <p>Your account is only permitted to enable auto-settlement, in which funds are captured automatically upon customer checkout, if your team fulfills 90% of orders within 3 days.</p>
+                </td></tr>
+                <tr>
+                    <td nowrap valign="top">
+                        <b>Settlement mode:</b>
+                    </td>
+                    <td width="100%" valign="top">
+                        <select name="bread_settlement_mode">
+                            <MvIF EXPR="{ g.bread_settlement_mode EQ 'checkout' }">
+                                <option value="checkout" selected>Checkout</option>
+                                <option value="capture">Payment Capture or Order Fulfillment</option>
+                            <MvELSE>
+                                <option value="checkout">Checkout</option>
+                                <option value="capture" selected>Payment Capture or Order Fulfillment</option>
+                            </MvIF>
+                        </select>
+                    </td>
+                </tr>
+                <tr><td colspan="2"><h3>Cart Size Filtering</h3><p>Select the min/max order subtotal required for the Bread Pay placement to surface</p></td></tr>
+                <tr>
+                    <td nowrap valign="top">
+                        <b>Enable Cart Size Filtering</b>
+                    </td>
+                    <td width="100%" valign="top">
+                        <select name="bread_cart_size_filter_enabled">
+                            <MvIF EXPR="{ g.bread_cart_size_filter_enabled EQ 'on' }">
+                                <option value="off">Off</option>
+                                <option value="on" selected>On</option>
+                            <MvELSE>
+                                <option value="off" selected>Off</option>
+                                <option value="on">On</option>
+                            </MvIF>
+                        </select>
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap valign="top">
+                        <b>Min Cart Size:</b>
+                    </td>
+                    <td width="100%" valign="top">
+                        <input type="number" step="0.01" name="bread_min_cart" value="{ encodeentities( g.bread_min_cart ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap valign="top">
+                        <b>Max Cart Size:</b>
+                    </td>
+                    <td width="100%" valign="top">
+                        <input type="number" step="0.01" name="bread_max_cart" value="{ encodeentities( g.bread_max_cart ) }" autocomplete="new">
+                    </td>
+                </tr>
+                <tr><td colspan="2"><h3>SKU Disable</h3><p>Select to include or exclude products from having the Bread Pay placement surface</p></td></tr>
+                <tr>
+                    <td nowrap valign="top">
+                        <b>SKU Filter Mode:</b>
+                    </td>
+                    <td width="100%" valign="top">
+                        <select name="bread_sku_filter_mode">
+                            <MvIF EXPR="{ g.bread_sku_filter_mode EQ 'exclude' }">
+                                <option value="none">Off</option>
+                                <option value="include">Include</option>
+                                <option value="exclude" selected>Exclude</option>
+                            <MvELSEIF EXPR="{ g.bread_sku_filter_mode EQ 'include' }">
+                                <option value="none">Off</option>
+                                <option value="include" selected>Include</option>
+                                <option value="exclude">Exclude</option>
+                            <MvELSE>
+                                <option value="none" selected>Off</option>
+                                <option value="include">Include</option>
+                                <option value="exclude">Exclude</option>
+                            </MvIF>
+                        </select>
+                    </td>
+                </tr>
+                <tr>
+                    <td nowrap valign="top">
+                        <b>SKU Filter:</b>
+                    </td>
+                    <td width="100%" valign="top">
+                        <input type="text" name="bread_sku_filter" value="{ encodeentities( g.bread_sku_filter ) }" autocomplete="new">
+                    </td>
+                </tr>
+            </table>
+        </div>
+    </MvIF>
+    <MvFUNCRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="Module_Payment_Validate" PARAMETERS="module var" STANDARDOUTPUTLEVEL="">
+    <MvASSIGN NAME="l.valid" VALUE=1>
+
+    <MvFUNCRETURN VALUE="1">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="Module_Payment_Update" PARAMETERS="module var" STANDARDOUTPUTLEVEL="text, html, compresswhitespace">
+    <MvASSIGN NAME="l.ok" VALUE="1">
+
+    <MvIF EXPR="{ g.BREAD_Screen EQ 1 }">
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options)}">
+
+        <MvASSIGN NAME="l.options" MEMBER="production"               VALUE="{ g.bread_production }">
+        <MvASSIGN NAME="l.options" MEMBER="apikey"                   VALUE="{ g.bread_apikey }">
+        <MvIF EXPR="{ NOT ISNULL g.bread_secretkey }">
+            <MvASSIGN NAME="l.options" MEMBER="secretkey"            VALUE="{ [ g.Module_Library_Crypto ].Encrypt_Payment_Password(g.bread_secretkey) }">
+        </MvIF>
+        <MvASSIGN NAME="l.options" MEMBER="integrationkey"           VALUE="{ g.bread_integrationkey }">
+        <MvASSIGN NAME="l.options" MEMBER="sandboxapikey"            VALUE="{ g.bread_sandboxapikey }">
+        <MvIF EXPR="{ NOT ISNULL g.bread_sandboxsecretkey }">
+            <MvASSIGN NAME="l.options" MEMBER="sandboxsecretkey"     VALUE="{ [ g.Module_Library_Crypto ].Encrypt_Payment_Password(g.bread_sandboxsecretkey) }">
+        </MvIF>
+        <MvASSIGN NAME="l.options" MEMBER="sandboxintegrationkey"    VALUE="{ g.bread_sandboxintegrationkey }">
+        <MvASSIGN NAME="l.options" MEMBER="settlement_mode"          VALUE="{ g.bread_settlement_mode }">
+        <MvASSIGN NAME="l.options" MEMBER="min_cart"                 VALUE="{ g.bread_min_cart }">
+        <MvASSIGN NAME="l.options" MEMBER="max_cart"                 VALUE="{ g.bread_max_cart }">
+        <MvASSIGN NAME="l.options" MEMBER="cart_size_filter_enabled" VALUE="{ g.bread_cart_size_filter_enabled }">
+        <MvASSIGN NAME="l.options" MEMBER="sku_filter"               VALUE="{ g.bread_sku_filter }">
+        <MvASSIGN NAME="l.options" MEMBER="sku_filter_mode"          VALUE="{ g.bread_sku_filter_mode }">
+
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Update(l.module, l.options)}">
+        <MvASSIGN NAME="l.save_settings_response" VALUE="{ bread_save_settings(module) }">
+        <MvIF EXPR="{ l.save_settings_response:success NE 'ok' }">
+            <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.save_settings_response }">
+            <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+            <MvFUNCRETURN VALUE="{ 0 }">
+        </MvIF>
+
+    </MvIF>
+    <MvFUNCRETURN VALUE="{ l.ok }">
+</MvFUNCTION>
+
+
+
+<MvCOMMENT>
+----------------------------------------------------------------------------------------------------------
+payment feature
+----------------------------------------------------------------------------------------------------------
+</MvCOMMENT>
+
+<MvFUNCTION NAME="PaymentModule_Enabled_Methods" PARAMETERS="module var, methods var" STANDARDOUTPUTLEVEL="">
+    <MvASSIGN NAME="l.cardcount" VALUE="{ 1 }">
+    <MvASSIGN NAME="l.methods" INDEX="{ l.cardcount }" MEMBER="code" VALUE="{ 'bread' }">
+    <MvASSIGN NAME="l.methods" INDEX="{ l.cardcount }" MEMBER="name" VALUE="{ 'Bread Pay' }">
+    <MvFUNCRETURN VALUE="{ l.cardcount }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Methods" PARAMETERS="module var, methods var" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="">
+    <MvASSIGN NAME="l.cardcount" VALUE="{ 1 }">
+    <MvASSIGN NAME="l.methods" INDEX="{ l.cardcount }" MEMBER="code" VALUE="{ 'bread' }">
+    <MvASSIGN NAME="l.methods" INDEX="{ l.cardcount }" MEMBER="name" VALUE="{ 'Bread Pay' }">
+    <MvFUNCRETURN VALUE="{ l.cardcount }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Description" PARAMETERS="module var, data" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="">
+    <MvIF EXPR="{ l.data EQ 'bread' }">
+        <MvASSIGN NAME="l.return" value="Pay Over Time With Bread Pay">
+    <MvELSE>
+        <MvASSIGN NAME="l.return" value="{ l.data }">
+    </MvIF>
+    <MvFUNCRETURN VALUE="{ l.return }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Hide_Additional_Fields" PARAMETERS="module var,code" STANDARDOUTPUTLEVEL="">
+    <MvEVAL EXPR="{ '<input type="hidden" name="breadpay_transaction_id" id="breadpay_transaction_id">' }">
+    <MvFUNCRETURN VALUE="">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Manipulate_Shipping" PARAMETERS="module var, code" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        TODO
+        API: 5.0
+        This function allows a payment module to modify shipping charges or add handling charges. This
+        function is called by Action_PaymentManipulateShipping, which in a default installation is called
+        between Action_CalculateShipping and Action_CalculateTax.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_URL" PARAMETERS="module var" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        TODO
+        API: 5.0
+        This function provides support for external payment processing systems. If a payment module needs
+        to hand control of the checkout process to an external website, it may do so by returning a URL
+        from this function. If a URL is returned, the form in the checkout interface where payment
+        information is collected will be submitted to that URL rather than Miva Merchant.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE="{ l.URL }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Fields" PARAMETERS="module var, code" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        TODO
+        API: 5.0
+        This function defines input fields to be used during the checkout process.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Field" PARAMETERS="module var, code, field_id" STANDARDOUTPUTLEVEL="text,html,compresswhitespace">
+    <MvCOMMENT>
+        API: 5.0
+        This function draws a checkout input field. When called, the module outputs any HTML required to
+        display the specified checkout field.
+    </MvCOMMENT>
+        <MvASSIGN name="l.ok" value="{ bread_load_settings(module) }">
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options)}">
+        <MvASSIGN NAME="l.BreadKeys" VALUE="{ get_bread_keys(module, 'false') }">
+
+        <MvIF EXPR="{ g.PaymentMethod EQ 'breadpay:bread' }">
+            <MvEVAL EXPR="{ '<script src="https://' $ get_bread_checkout_hostname(module) $ '/sdk.js" data-api-key="' $ l.BreadKeys:apiKey $ '"></script>' }">
+        </MvIF>
+
+        <MvIF EXPR="{ g.PaymentMethod EQ 'breadpay:bread' }">
+
+            <MvASSIGN NAME="l.basket_total" VALUE="{ [ g.Module_Library_DB ].Basket_Total( g.Basket:basket_id ) }">
+
+            <MvIF EXPR = "{ [ g.Module_Library_DB ].BasketItemList_Load_Basket( g.basket:basket_id, l.basketitems) AND
+                             [ g.Module_Library_DB ].BasketChargeList_Load_Basket( g.basket:basket_id, l.basketcharges) }">
+                <div id="bread-id"></div>
+                <script defer type="text/javascript">
+                    (function(){
+                        document.addEventListener("DOMContentLoaded", function(){
+                            // order should be done via embedded checkout
+                            let placeOrderBtn = document.querySelector('[data-hook="submit-form"]');
+                            placeOrderBtn.style.display = 'none';
+                        });
+
+                        let sku_filter_mode = '<MvEVAL EXPR="{ l.options:sku_filter_mode }">';
+                        let sku_filter = '<MvEVAL EXPR="{ l.options:sku_filter }">';
+                        let sku_filter_list = sku_filter.split(",").map(function(item) {
+                            return item.trim();
+                        });
+                        function skuCheck(sku) {
+                            if (sku_filter_mode == "none") {
+                                return true;
+                            } else if (sku_filter_mode == "include") {
+                                return sku_filter_list.includes(sku);
+                            } else if (sku_filter_mode == "exclude") {
+                                return !sku_filter_list.includes(sku);
+                            }
+                            return false;
+                        }
+
+                        var discounts = [];
+                        <MvFOREACH ITERATOR="l.charge" ARRAY="l.basketcharges">
+                            <MvIF EXPR="{ l.charge:type EQ 'TAX' }">
+                                <MvASSIGN NAME="g.taxamount" VALUE="{ rnd((l.charge:amount)*100, 0) }">
+                            <MvELSEIF EXPR="{ l.charge:type EQ 'SHIPPING' }">
+                                <MvASSIGN NAME="g.shipname" VALUE="{ l.charge:descrip }">
+                                <MvASSIGN NAME="g.shipcode" VALUE="{ l.charge:descrip }">
+                                <MvASSIGN NAME="g.shipamount" VALUE="{ (l.charge:amount)*100 }">
+                            <MvELSEIF EXPR="{ l.charge:amount LT 0 }">
+                                <MvASSIGN NAME="l.charge:safedescrip" VALUE="{ glosub(l.charge:descrip, asciichar(39), asciichar(92) $ asciichar(39)) }" />
+                                discounts.push(
+                                    {
+                                        amount: <MvEVAL EXPR="{ l.charge:amount * 100 * -1 }">,
+                                        description: '<MvEVAL EXPR="{ l.charge:safedescrip }">'
+                                    }
+                                );
+                            </MvIF>
+                        </MvFOREACH>
+                        const totalDiscounts = discounts.reduce((partialSum, nextDiscount) => partialSum + nextDiscount.amount, 0);
+
+                        function setInStorePickup(placement, pickupName) {
+                            <MvIF EXPR="{ indexof('Instore Pick-up', g.shipname, 0) NE 0 }">
+                                <MvASSIGN NAME="l.BreadMerchantLocation" VALUE="{ get_bread_merchant_location(module) }">
+                            </MvIF>
+                            <MvIF EXPR="{ l.BreadMerchantLocation:success EQ 'ok' }">
+                                let data = <MvEVAL EXPR="{ l.BreadMerchantLocation:json }">;
+                            <MvELSE>
+                                return;
+                            </MvIF>
+                            for (let item in placement.order.items) {
+                                item["fulfillmentType"] = "PICKUP";
+                            }
+                            if (data.items.length == 0) {
+                                return;
+                            }
+
+                            let location = data.items[0];
+                            placement.order["fulfillmentType"] = "PICKUP";
+                            placement.order["pickupInformation"] = {
+                                address: {
+                                    address1: location.address.address1,
+                                    address2: location.address.address2,
+                                    country: location.address.country,
+                                    region: location.address.region,
+                                    locality: location.address.locality,
+                                    postalCode: location.address.postalCode,
+                                }
+                            }
+                        }
+
+
+                        let items = [];
+                        let forbiddenItems = [];
+                        let total = <MvEVAL EXPR="{ l.basket_total * 100 }">;
+                        let cartSizeFilteringEnabled = <MvEVAL EXPR="{ l.options:cart_size_filter_enabled EQ 'on' }">;
+                        let minCartSize = <MvEVAL EXPR="{ l.options:min_cart }">;
+
+
+                        if (cartSizeFilteringEnabled && (total / 100 < minCartSize)) {
+                            console.log("Bread Pay is not supported for cart sizes smaller than: $", minCartSize);
+                            let breadDiv = document.getElementById("bread-id");
+                            breadDiv.textContent = "Bread Pay is not supported for cart sizes smaller than: " + minCartSize;
+                            breadDiv.style = "color:red;";
+                            return;
+                        }
+
+                        <MvASSIGN NAME="g.totalPriceInCents" VALUE="{ 0 }">
+                        <MvFOREACH ITERATOR="l.item" ARRAY="l.basketitems">
+                            <MvASSIGN NAME="l.basketoptioncount" VALUE = "{ [ g.Module_Library_DB ].BasketOptionList_Load_Line( l.item:line_id, l.item:options) }">
+                            <MvASSIGN NAME="l.itemOptions" VALUE="">
+                            <MvASSIGN NAME="l.itemTotalPrice" VALUE="{ l.item:price }">
+                            <MvFOREACH ITERATOR="l.option" ARRAY="l.item:options">
+                                <MvASSIGN NAME="l.itemTotalPrice" VALUE="{ l.itemTotalPrice + l.option:price }">
+                            </MvFOREACH>
+
+                            <MvASSIGN NAME="g.priceInCents" VALUE="{ l.itemTotalPrice * 100 }">
+                            <MvASSIGN NAME="g.totalPriceInCents" VALUE="{ g.totalPriceInCents + l.itemTotalPrice * 100 * l.item:quantity}">
+                            <MvASSIGN NAME="l.uri:store_id" VALUE="{ g.Store:id }">
+                            <MvASSIGN NAME="l.uri:screen" VALUE="">
+                            <MvASSIGN NAME="l.uri:page_id" VALUE="0">
+                            <MvASSIGN NAME="l.uri:cat_id" VALUE="0">
+                            <MvASSIGN NAME="l.uri:product_id" VALUE="{ l.item:product_id }">
+                            <MvDO FILE="{ g.Module_Feature_URI_DB }" NAME="l.have_uri" VALUE="{ URI_Load_Item_Canonical( l.uri, l.canonical_uri ) }" />
+                            <MvIF EXPR="{ l.have_uri }">
+                                <MvASSIGN NAME="l.detailURL" VALUE="{ g.session:cache:urisettings_load_cached:urisettings:urlprefix $ l.canonical_uri:uri }">
+                            <MvELSE>
+                                <MvASSIGN NAME="l.detailURL" VALUE="{ g.sessionurl $ '?Screen=PROD&Product_Code=' $ l.item:code }">
+                            </MVIF>
+
+                            <MvASSIGN NAME="l.item:safename" VALUE="{ glosub(l.item:name, asciichar(39), asciichar(92) $ asciichar(39)) }" />
+                            items.push(
+                                {
+                                    name: '<MvEVAL EXPR="{ l.item:safename }">',
+                                    sku: '<MvEVAL EXPR="{ l.item:sku }">',
+                                    detailUrl: '<MvEVAL EXPR="{ l.detailURL }">',
+                                    quantity: <MvEVAL EXPR="{ l.item:quantity }">,
+                                    brand: '',
+                                    category: '',
+                                    currency: "USD",
+                                    unitPrice: {
+                                        value: <MvEVAL EXPR="{ g.priceInCents }">,
+                                        currency: "USD",
+                                    },
+                                    unitTax: {
+                                        value: 0,
+                                        currency: "USD",
+                                    },
+                                    shippingCost: {
+                                        value: 0,
+                                        currency: "USD",
+                                    },
+                                    shippingDescription: '<MvEVAL EXPR="{ g.shipname }">',
+                                }
+                            );
+                            if (!skuCheck('<MvEVAL EXPR="{ l.item:sku }">')) {
+                                forbiddenItems.push(
+                                    {
+                                        name: '<MvEVAL EXPR="{ l.item:safename }">',
+                                        sku: '<MvEVAL EXPR="{ l.item:sku }">',
+                                    }
+                                )
+                            }
+                        </MvFOREACH>
+
+                        if (forbiddenItems.length > 0) {
+                            console.log("Bread Pay is not supported for the following items: ", forbiddenItems);
+                            let breadDiv = document.getElementById("bread-id");
+                            let financingText = "Bread Pay financing is not available for the following items: ";
+                            for (const item of forbiddenItems) {
+                                financingText += item.name + ", ";
+                            }
+                            financingText = financingText.substring(0, financingText.length-2);
+                            breadDiv.textContent = financingText;
+                            breadDiv.style = "color:red;";
+                            return;
+                        }
+
+                        <MvASSIGN NAME="g.shipPhoneClean" VALUE="{ glosub(glosub(g.basket:ship_phone,'-',''),'.','') }">
+                        <MvASSIGN NAME="g.shipZipClean" VALUE="{ substring(g.basket:ship_zip,1,5) }">
+                        var shippingContact = {
+                            email:      '<MvEVAL EXPR="{ g.basket:ship_email }">',
+                            firstName:  '<MvEVAL EXPR="{ g.basket:ship_fname }">',
+                            lastName:   '<MvEVAL EXPR="{ g.basket:ship_lname }">',
+                            address:    '<MvEVAL EXPR="{ g.basket:ship_addr1 }">',
+                            <MvIF EXPR="{ NOT ISNULL g.basket:ship_addr2 }">
+                            address2:   '<MvEVAL EXPR="{ g.basket:ship_addr2 }">',
+                            <MvELSE>
+                            address2:   '',
+                            </MvIF>
+                            zip:        '<MvEVAL EXPR="{ g.shipZipClean }">',
+                            <MvIF EXPR="{ len(g.shipPhoneClean) EQ 10 }">
+                            phone:      '<MvEVAL EXPR="{ g.shipPhoneClean }">',
+                            </MvIF>
+                            city:       '<MvEVAL EXPR="{ g.basket:ship_city }">',
+                            state:      '<MvEVAL EXPR="{ g.basket:ship_state }">',
+                            country:    '<MvEVAL EXPR="{ g.basket:ship_cntry }">'
+                        };
+
+                        <MvASSIGN NAME="g.billPhoneClean" VALUE="{ glosub(glosub(g.basket:bill_phone,'-',''),'.','') }">
+                        <MvASSIGN NAME="g.billZipClean" VALUE="{ substring(g.basket:bill_zip,1,5) }">
+                        var billingContact = {
+                            email:      '<MvEVAL EXPR="{ g.basket:bill_email }">',
+                            firstName:  '<MvEVAL EXPR="{ g.basket:bill_fname }">',
+                            lastName:   '<MvEVAL EXPR="{ g.basket:bill_lname }">',
+                            address:    '<MvEVAL EXPR="{ g.basket:bill_addr1 }">',
+                            <MvIF EXPR="{ NOT ISNULL g.basket:bill_addr2 }">
+                            address2:   '<MvEVAL EXPR="{ g.basket:bill_addr2 }">',
+                            <MvELSE>
+                            address2:   '',
+                            </MvIF>
+                            zip:        '<MvEVAL EXPR="{ g.billZipClean }">',
+                            <MvIF EXPR="{ len(g.billPhoneClean) EQ 10 }">
+                            phone:      '<MvEVAL EXPR="{ g.billPhoneClean }">',
+                            </MvIF>
+                            city:       '<MvEVAL EXPR="{ g.basket:bill_city }">',
+                            state:      '<MvEVAL EXPR="{ g.basket:bill_state }">',
+                            country:    '<MvEVAL EXPR="{ g.basket:bill_cntry }">'
+                        };
+
+                        let newOpts = {
+                          containerID: "bread-id",
+                          actAsLabel: false,
+                          asLowAs: true,
+                          embedded_checkout: true,
+                          buttonLocation: 'checkout',
+                          disableEditShipping: true,
+                          hideFieldsWhenProvided: false,
+                          billingContact: billingContact,
+                          shippingContact: shippingContact,
+                          items: items,
+                          discounts: discounts,
+                          customTotal: total,
+                          integrationKey: '<MvEVAL EXPR="{ l.BreadKeys:integrationKey }">',
+                          buyer: {
+                            givenName: shippingContact.firstName,
+                            familyName: shippingContact.lastName,
+                            phone: shippingContact.phone,
+                            email: shippingContact.email,
+                            shippingAddress: {
+                              address1: shippingContact.address,
+                              address2: shippingContact.address2,
+                              locality: shippingContact.city,
+                              region: shippingContact.state,
+                              postalCode: shippingContact.zip,
+                              country: shippingContact.country,
+                            },
+                          },
+                          done: function(err, tx) {},
+                          calculateTax: function(sc, bc, cb) {}
+                        };
+
+                        if (<MvEVAL EXPR="{ g.shipamount }"> > 0) {
+                            newOpts.shippingOptions = [
+                                {
+                                type: '<MvEVAL EXPR="{ g.shipname }">',
+                                typeId: 'MIVA',
+                                cost: <MvEVAL EXPR="{ g.shipamount }">
+                                }
+                            ];
+                        }
+
+
+                        const placement = {
+                          locationType: "checkout",
+                          allowCheckout: true,
+                          domID: "bread-id",
+                          order: {
+                            items: items,
+                            subTotal: {
+                              value: <MvEVAL EXPR="{ g.totalPriceInCents }">,
+                              currency: "USD",
+                            },
+                            totalTax: {
+                              value: <MvEVAL EXPR="{ g.taxamount }">,
+                              currency: "USD",
+                            },
+                            totalShipping: {
+                              value: <MvEVAL EXPR="{ g.shipamount }">,
+                              currency: "USD",
+                            },
+                            totalDiscounts: {
+                              value: totalDiscounts,
+                              currency: "USD",
+                            },
+                            totalPrice: {
+                              value: total,
+                              currency: "USD",
+                            },
+                          },
+                        };
+
+                        let shipName = '<MvEVAL EXPR="{ g.shipname }">';
+                        if (shipName.includes("Instore Pick-up")) {
+                            setInStorePickup(placement, shipName)
+                        }
+
+                        window.BreadPayments.setup(newOpts);
+                        window.BreadPayments.on("INSTALLMENT:APPLICATION_CHECKOUT", (checkout) => {
+                            document.getElementById('breadpay_transaction_id').value = checkout.transactionID;
+                            document.getElementById('breadpay_transaction_id').form.submit();
+                        });
+                        window.BreadPayments.__internal__.setEmbedded(true);
+                        window.BreadPayments.__internal__.setAutoRender(false);
+                        window.BreadPayments.registerPlacements([placement]);
+                        window.BreadPayments.init();
+                    })();
+                </script>
+            </MvIF>
+        </MvIF>
+
+    <MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Message" PARAMETERS="module var, code" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        TODO
+        API: 5.0
+        This function allows an (optional) informational message to be displayed. If the function returns
+        a non-empty string, it is displayed prior to any payment fields during the checkout process.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE="{ l.message }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Prompt" PARAMETERS="module var, code, field_id" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        TODO
+        API: 5.0
+        This function provides a prompt for a checkout input field.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE="{ l.text_prompt }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Invalid" PARAMETERS="module var, code, field_id" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        TODO
+        API: 5.0
+        This function indicates whether a checkout field should be flagged as invalid.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Payment_Validate" PARAMETERS="module var, code" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        TODO
+        API: 5.0
+        This function validates checkout fields. When called, the module should verify that all input
+        fields drawn by PaymentModule_Payment_Field for the specified payment method were filled out
+        correctly maintaining whatever internal state is required for PaymentModule_Payment_Invalid to
+        indicate specific fields that failed validation. Typically, a payment module will not interact
+        with an external gateway for this stage of the validation, and will instead report gateway errors
+        when PaymentModule_Authorize or PaymentModule_Runtime_Authorize is called.
+    </MvCOMMENT>
+
+    <MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Authorize" PARAMETERS="module var, module_data, total, data var, secure_data var" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT> * deprecated * </MvCOMMENT>
+    <MvFUNCRETURN VALUE="{ 1 }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="get_bread_auth_token" PARAMETERS="module var, force_prod" STANDARDOUTPUTLEVEL="text" >
+    <MvCOMMENT> TODO figure out how to cache this </MvCOMMENT>
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+    <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, force_prod) $ '/api/auth/service/authorize' }">
+    <MvASSIGN NAME="l.BreadKeys" VALUE="{ get_bread_keys(module, force_prod) }">
+    <MvASSIGN NAME="l.authentication" VALUE="{ crypto_base64_encode(l.BreadKeys:apiKey $ ':' $ l.BreadKeys:secret) }">
+    <MvCALL ACTION="{ l.breadurl }"
+                METHOD="POST"
+                HEADERS="{ 'Authorization: Basic ' $ l.authentication $ asciichar(13) $ asciichar(10) }">
+        <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+    </MvCALL>
+    <MIVA MvCALL_ERROR = "fatal, display">
+    <MvIF EXPR = "{ g.MvCALL_Error }">
+        <MvASSIGN NAME="g.BreadTokenResponse:success" VALUE="{ 'false' }">
+        <MvFUNCTIONRETURN VALUE = "{ g.BreadTokenResponse }">
+    </MvIF>
+    <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, g.BreadTokenResponse) }">
+    <MvASSIGN NAME="g.BreadTokenResponse:success" VALUE="{ 'ok' }">
+    <MvFUNCTIONRETURN VALUE = "{ g.BreadTokenResponse }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="get_bread_experience_keys" PARAMETERS="module var" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+    <MvASSIGN NAME="l.BreadKeys" VALUE="{ get_bread_keys(module, force_prod) }">
+    <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/experience-keys/' $ l.BreadKeys:integrationKey }">
+    <MvCALL ACTION="{ l.breadurl }" METHOD="GET">
+        <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+    </MvCALL>
+    <MIVA MvCALL_ERROR = "fatal, display">
+    <MvIF EXPR = "{ g.MvCALL_Error }">
+        <MvASSIGN NAME="g.BreadExperienceKeysResponse:success" VALUE="{ 'false' }">
+        <MvFUNCTIONRETURN VALUE = "{ g.BreadExperienceKeysResponse }">
+    </MvIF>
+    <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, g.BreadExperienceKeysResponse) }">
+    <MvASSIGN NAME="g.BreadExperienceKeysResponse:success" VALUE="{ 'ok' }">
+    <MvFUNCTIONRETURN VALUE = "{ g.BreadExperienceKeysResponse }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="get_bread_merchant_location" PARAMETERS="module var" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.experienceKeys" VALUE="{ get_bread_experience_keys(module) }">
+    <MvIF EXPR="{ l.experienceKeys:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.experienceKeys }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvASSIGN NAME="l.BreadKeys" VALUE="{ get_bread_keys(module, force_prod) }">
+    <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+    <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/organization/merchant/' $ l.experienceKeys:merchantID $ '/location'}">
+    <MvCALL ACTION="{ l.breadurl }"
+                METHOD="GET"
+                HEADERS="{ 'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) $
+                 'X-API-VERSION: v2' $ asciichar(13) $ asciichar(10)}">
+        <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+    </MvCALL>
+    <MIVA MvCALL_ERROR = "fatal, display">
+    <MvIF EXPR = "{ g.MvCALL_Error }">
+        <MvASSIGN NAME="g.BreadMerchantLocationResponse:success" VALUE="{ 'false' }">
+        <MvFUNCTIONRETURN VALUE = "{ g.BreadMerchantLocationResponse }">
+    </MvIF>
+    <MvASSIGN NAME="g.BreadMerchantLocationResponse:success" VALUE="{ 'ok' }">
+    <MvASSIGN NAME="g.BreadMerchantLocationResponse:json" VALUE="{ l.jsonResponse }">
+    <MvFUNCTIONRETURN VALUE = "{ g.BreadMerchantLocationResponse }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="get_bread_hostname" PARAMETERS="module var, force_prod" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvIF EXPR="{ ('production' EQ l.options:production) OR ('true' EQ force_prod) }">
+        <MvASSIGN NAME="l.bread_hostname" VALUE="{ 'api.pp-prod-ads.ue2.breadgateway.net' }">
+    <MvELSE>
+        <MvASSIGN NAME="l.bread_hostname" VALUE="{ 'api.sp-pv-ads.ue2.breadgateway.net' }">
+    </MvIF>
+    <MvFUNCTIONRETURN VALUE = "{ l.bread_hostname }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="get_bread_checkout_hostname" PARAMETERS="module var" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvIF EXPR="{ 'production' EQ l.options:production }">
+        <MvASSIGN NAME="l.bread_hostname" VALUE="{ 'connect.breadpayments.com' }">
+    <MvELSE>
+        <MvASSIGN NAME="l.bread_hostname" VALUE="{ 'connect-preview.breadpayments.com' }">
+    </MvIF>
+    <MvFUNCTIONRETURN VALUE = "{ l.bread_hostname }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="get_bread_keys" PARAMETERS="module var, force_prod" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvIF EXPR="{ ('production' EQ l.options:production) OR ('true' EQ force_prod) }">
+        <MvASSIGN NAME="l.BreadKeys:apiKey" VALUE="{ l.options:apikey }">
+        <MvASSIGN NAME="l.BreadKeys:secret" VALUE="{ l.options:secretkey }">
+        <MvASSIGN NAME="l.BreadKeys:integrationKey" VALUE="{ l.options:integrationkey }">
+    <MvELSE>
+        <MvASSIGN NAME="l.BreadKeys:apiKey" VALUE="{ l.options:sandboxapikey }">
+        <MvASSIGN NAME="l.BreadKeys:secret" VALUE="{ l.options:sandboxsecretkey }">
+        <MvASSIGN NAME="l.BreadKeys:integrationKey" VALUE="{ l.options:sandboxintegrationkey }">
+    </MvIF>
+    <MvFUNCTIONRETURN VALUE = "{ l.BreadKeys }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="bread_save_settings" PARAMETERS="module var" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvIF EXPR="{ 'production' EQ l.options:production }">
+        <MvASSIGN NAME="l.production" VALUE="{ 'true' }">
+    <MvELSE>
+        <MvASSIGN NAME="l.production" VALUE="{ 'false' }">
+    </MvIF>
+    <MvIF EXPR="{ 'on' EQ l.options:cart_size_filter_enabled }">
+        <MvASSIGN NAME="l.cart_size_mode" VALUE="{ 'true' }">
+    <MvELSE>
+        <MvASSIGN NAME="l.cart_size_mode" VALUE="{ 'false' }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ '
+        "storeId":"' $ g.Store:name $ '",
+        "pluginType":"' $ 'MIVA' $ '",
+        "integrationKey":"' $ l.options:integrationkey $ '",
+        "sandboxIntegrationKey":"' $ l.options:sandboxintegrationkey $ '",
+        "breadApiKey":"' $ l.options:apikey $ '",
+        "breadApiKeySandbox":"' $ l.options:sandboxapikey $ '",
+        "breadSecretKey":"' $ l.options:secretkey $ '",
+        "breadSecretKeySandbox":"' $ l.options:sandboxsecretkey $ '",
+        "production":' $ l.production $ ',
+        "settlementMode":"' $ toupper(l.options:settlement_mode) $ '",
+        "skuFilter":"' $ l.options:sku_filter $ '",
+        "skuFilterMode":"' $ toupper(l.options:sku_filter_mode) $ '",
+        "minCartValue":' $ l.options:min_cart $ ',
+        "minCartMode":' $ l.cart_size_mode $ ',
+        "enableProductButton":' $ 'false' $ ',
+        "enableCartButton":' $ 'false' $ ',
+        "enableEmbeddedCheckout":' $ 'true' $ ',
+        "customData":"' $ asciichar(123) $ '\\"max_cart\\":' $ l.options:max_cart $ asciichar(125) $ '"' $
+    asciichar(125) }">
+
+    <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'true') $ '/api/core-plugin-backend/settings' }">
+    <MvCALL ACTION="{ l.breadurl }"
+                METHOD="RAW"
+                FIELDS="l.json"
+                HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+        <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+    </MvCALL>
+    <MIVA MvCALL_ERROR = "fatal, display">
+    <MvIF EXPR = "{ g.MvCALL_Error }">
+        <MvASSIGN NAME="g.BreadSaveSettingsResponse:success" VALUE="{ 'false' }">
+        <MvFUNCTIONRETURN VALUE = "{ g.BreadSaveSettingsResponse }">
+    </MvIF>
+    <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, g.BreadSaveSettingsResponse) }">
+    <MvASSIGN NAME="g.BreadSaveSettingsResponse:success" VALUE="{ 'ok' }">
+    <MvFUNCTIONRETURN VALUE = "{ g.BreadSaveSettingsResponse }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="bread_load_settings" PARAMETERS="module var" STANDARDOUTPUTLEVEL="text" >
+    <MvOPENVIEW NAME="Merchant"
+                VIEW="BREAD_Global"
+                QUERY="{ 'SELECT * FROM ' $ g.Store_Table_Prefix $ l.module:code $ '_Global' }">
+        <MvIF EXPR="{ g.MvOPENVIEW_Error }">
+            <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00014', g.MvOPENVIEW_Error ) - 1 }">
+        </MvIF>
+
+        <MvASSIGN NAME="l.ok" VALUE=1>
+        <MvIF EXPR="{ NOT BREAD_Global.d.EOF }">
+            <MvASSIGN NAME="l.last_sync_time" VALUE="{ BREAD_Global.d.last_sync_time }">
+        <MvELSE>
+            <MvASSIGN NAME="l.ok" VALUE=0>
+        </MvIF>
+    <MvCLOSEVIEW NAME="Merchant" VIEW="BREAD_Global">
+
+    <MvIF EXPR="{ l.last_sync_time GT (s.time_t - 60 * 5) }">
+        <MvCOMMENT> Don't bother updating if last update was within 5 minutes from now </MvCOMMENT>
+        <MvFUNCRETURN VALUE="{ 1 }">
+    </MvIF>
+
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'true') $ '/api/core-plugin-backend/settings?storeId=' $ encodeattribute(g.Store:name) $ '&pluginType=MIVA' }">
+    <MvCALL ACTION="{ l.breadurl }"
+                METHOD="GET"
+                HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+        <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+    </MvCALL>
+    <MIVA MvCALL_ERROR = "fatal, display">
+    <MvIF EXPR = "{ g.MvCALL_Error }">
+        <MvASSIGN NAME="g.BreadLoadSettingsResponse:success" VALUE="{ 'false' }">
+        <MvFUNCTIONRETURN VALUE = "{ g.BreadLoadSettingsResponse }">
+    </MvIF>
+    <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, g.BreadLoadSettingsResponse) }">
+    <MvIF EXPR="{ l.ok EQ 0 }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ l.jsonResponse }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+    <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(g.BreadLoadSettingsResponse:customData, l.custom_data) }">
+    <MvIF EXPR="{ l.ok NOT EQ 0 }">
+        <MvASSIGN NAME="l.options" MEMBER="max_cart" VALUE="{ l.custom_data:max_cart }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.minCartMode" VALUE="{ 'off' }">
+    <MvIF EXPR="{ g.BreadLoadSettingsResponse:minCartMode EQ 'true' }">
+        <MvASSIGN NAME="l.minCartMode" VALUE="{ 'on' }">
+    </MvIF>
+
+
+    <MvASSIGN NAME="l.options" MEMBER="production"               VALUE="{ g.BreadLoadSettingsResponse:production }">
+    <MvASSIGN NAME="l.options" MEMBER="apikey"                   VALUE="{ g.BreadLoadSettingsResponse:breadApiKey }">
+    <MvASSIGN NAME="l.options" MEMBER="secretkey"                VALUE="{ [ g.Module_Library_Crypto ].Encrypt_Payment_Password(g.BreadLoadSettingsResponse:breadSecretKey) }">
+    <MvASSIGN NAME="l.options" MEMBER="integrationkey"           VALUE="{ g.BreadLoadSettingsResponse:integrationKey }">
+    <MvASSIGN NAME="l.options" MEMBER="sandboxapikey"            VALUE="{ g.BreadLoadSettingsResponse:breadApiKeySandbox }">
+    <MvASSIGN NAME="l.options" MEMBER="sandboxsecretkey"         VALUE="{ [ g.Module_Library_Crypto ].Encrypt_Payment_Password(g.BreadLoadSettingsResponse:breadSecretKeySandbox) }">
+    <MvASSIGN NAME="l.options" MEMBER="sandboxintegrationkey"    VALUE="{ g.BreadLoadSettingsResponse:sandboxIntegrationKey }">
+    <MvASSIGN NAME="l.options" MEMBER="settlement_mode"          VALUE="{ tolower(g.BreadLoadSettingsResponse:settlementMode) }">
+    <MvASSIGN NAME="l.options" MEMBER="min_cart"                 VALUE="{ g.BreadLoadSettingsResponse:minCartValue }">
+    <MvASSIGN NAME="l.options" MEMBER="sku_filter"               VALUE="{ g.BreadLoadSettingsResponse:skuFilter }">
+    <MvASSIGN NAME="l.options" MEMBER="sku_filter_mode"          VALUE="{ tolower(g.BreadLoadSettingsResponse:skuFilterMode) }">
+    <MvASSIGN NAME="l.options" MEMBER="cart_size_filter_enabled" VALUE="{ l.minCartMode }">
+    <MvASSIGN NAME="l.options" MEMBER="last_sync_time"           VALUE="{ s.time_t }">
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Update(l.module, l.options)}">
+
+    <MvFUNCTIONRETURN VALUE = "{ l.ok }">
+</MvFUNCTION>
+
+
+<MvFUNCTION NAME="bread_record_checkout" PARAMETERS="module var, breadpay_transaction_id, total" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'true') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvIF EXPR="{ 'production' EQ l.options:production }">
+        <MvASSIGN NAME="l.test_transaction" VALUE="{ 'false' }">
+    <MvELSE>
+        <MvASSIGN NAME="l.test_transaction" VALUE="{ 'true' }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.discountamount" VALUE="{ 0 }">
+    <MvASSIGN NAME="l.basket_total" VALUE="{ [ g.Module_Library_DB ].Basket_Total( g.Basket:basket_id ) * 100 }">
+    <MvASSIGN NAME="l.ok" VALUE="{ [ g.Module_Library_DB ].BasketChargeList_Load_Basket( g.basket:basket_id, l.basketcharges) }">
+    <MvASSIGN NAME="l.ok" VALUE="{ [ g.Module_Library_DB ].BasketItemList_Load_Basket( g.basket:basket_id, l.basketitems) }">
+    <MvFOREACH ITERATOR="l.charge" ARRAY="l.basketcharges">
+        <MvIF EXPR="{ l.charge:type EQ 'TAX' }">
+            <MvASSIGN NAME="l.taxamount" VALUE="{ rnd((l.charge:amount)*100, 0) }">
+        <MvELSEIF EXPR="{ l.charge:type EQ 'SHIPPING' }">
+            <MvASSIGN NAME="l.shipamount" VALUE="{ rnd((l.charge:amount)*100, 0) }">
+        <MvELSEIF EXPR="{ l.charge:amount LT 0 }">
+            <MvASSIGN NAME="l.discountamount" VALUE="{ rnd(l.discountamount + (l.charge:amount)*100, 0) }">
+        </MvIF>
+    </MvFOREACH>
+    <MvASSIGN NAME="l.discountamount" VALUE="{ abs(l.discountamount) }">
+
+    <MvASSIGN NAME="l.totalPriceInCents" VALUE="{ 0 }">
+    <MvFOREACH ITERATOR="l.item" ARRAY="l.basketitems">
+        <MvASSIGN NAME="l.basketoptioncount" VALUE = "{ [ g.Module_Library_DB ].BasketOptionList_Load_Line( l.item:line_id, l.item:options) }">
+        <MvASSIGN NAME="l.itemTotalPrice" VALUE="{ l.item:price }">
+        <MvFOREACH ITERATOR="l.option" ARRAY="l.item:options">
+            <MvASSIGN NAME="l.itemTotalPrice" VALUE="{ l.itemTotalPrice + l.option:price }">
+        </MvFOREACH>
+        <MvASSIGN NAME="l.totalPriceInCents" VALUE="{ l.totalPriceInCents + l.itemTotalPrice * 100 * l.item:quantity}">
+    </MvFOREACH>
+
+    <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ '
+        "transactionId":"' $ breadpay_transaction_id $ '",
+        "storeId":"' $ g.Store:name $ '",
+        "order":' $ asciichar(123) $ '
+            "currency":"USD",' $ '
+            "subTotal":' $ asciichar(123) $ '
+                "value":' $ l.totalPriceInCents $ ',
+                "currency":"USD"' $
+            asciichar(125) $ ',
+            "totalShipping":' $ asciichar(123) $ '
+                "value":' $ l.shipamount $ ',
+                "currency":"USD"' $
+            asciichar(125) $ ',
+            "totalTax":' $ asciichar(123) $ '
+                "value":' $ l.taxamount $ ',
+                "currency":"USD"' $
+            asciichar(125) $ ',
+            "totalDiscounts":' $ asciichar(123) $ '
+                "value":' $ l.discountamount $ ',
+                "currency":"USD"' $
+            asciichar(125) $ ',
+            "totalPrice":' $ asciichar(123) $ '
+                "value":' $ l.basket_total $ ',
+                "currency":"USD"' $
+            asciichar(125) $
+        asciichar(125) $ ',
+        "buyer":' $ asciichar(123) $ '
+            "givenName":"' $ g.basket:ship_fname $ '",
+            "familyName":"' $ g.basket:ship_lname $ '",
+            "phone":"' $ glosub(glosub(g.basket:ship_phone,'-',''),'.','') $ '",
+            "email":"' $ g.basket:ship_email $ '",
+            "shippingAddress":' $ asciichar(123) $ '
+                "address1":"' $ g.basket:ship_addr1 $ '",
+                "address2":"' $ g.basket:ship_addr2 $ '",
+                "locality":"' $ g.basket:ship_city $ '",
+                "region":"' $ g.basket:ship_state $ '",
+                "postalCode":"' $ substring(g.basket:ship_zip,1,5) $ '",
+                "country":"' $ g.basket:ship_cntry $ '"' $
+            asciichar(125) $
+        asciichar(125) $ ',
+        "test":' $ l.test_transaction $ ',
+        "status":"' $ 'AUTHORIZED' $ '",
+        "orderNumber":"' $ g.Basket:order_id $ '"' $
+    asciichar(125) }">
+
+    <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'true') $ '/api/core-plugin-backend/record-checkout' }">
+    <MvCALL ACTION="{ l.breadurl }"
+                METHOD="RAW"
+                FIELDS="l.json"
+                HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+        <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+    </MvCALL>
+    <MIVA MvCALL_ERROR = "fatal, display">
+    <MvIF EXPR = "{ g.MvCALL_Error }">
+        <MvASSIGN NAME="g.BreadRecordCheckoutResponse:success" VALUE="{ 'false' }">
+        <MvFUNCTIONRETURN VALUE = "{ g.BreadRecordCheckoutResponse }">
+    </MvIF>
+    <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, g.BreadRecordCheckoutResponse) }">
+    <MvASSIGN NAME="g.BreadRecordCheckoutResponse:success" VALUE="{ 'ok' }">
+    <MvFUNCTIONRETURN VALUE = "{ g.BreadRecordCheckoutResponse }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="bread_authorize" PARAMETERS="module var, breadpay_transaction_id, total" STANDARDOUTPUTLEVEL="text" >
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ '
+        "amount":' $ asciichar(123) $ '
+            "value":' $ rnd(l.total * 100, 0) $',
+            "currency": "USD"
+        ' $ asciichar(125) $ '
+        ' $ asciichar(125) }">
+    <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/transaction/' $ l.breadpay_transaction_id $ '/authorize' }">
+    <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+    <MvCALL ACTION="{ l.breadurl }"
+                METHOD="RAW"
+                FIELDS="l.json"
+                HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+        <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+    </MvCALL>
+    <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, l.BreadResponse) }">
+
+    <MvIF EXPR="{ (l.BreadResponse:status EQ 'AUTHORIZED') AND (int(l.total*100) EQ l.BreadResponse:totalAmount:value) }">
+        <MvCOMMENT> --- authorization succeeded and amounts matched --- </MvCOMMENT>
+        <MvASSIGN NAME="l.pay_data" MEMBER="breadpay_transaction_id" VALUE="{ l.breadpay_transaction_id }">
+        <MvASSIGN NAME="l.pay_data" MEMBER="breadpay_transaction_type" VALUE="{ l.BreadResponse:productType }">
+        <MvASSIGN NAME="l.orderpaymenttype"    VALUE="{ 3 }">
+
+        <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Create( g.Basket:order_id,
+                                                                    0,
+                                                                    l.orderpaymenttype,
+                                                                    g.Basket:order_id,
+                                                                    l.total, l.total,
+                                                                    l.module:id,
+                                                                    l.pay_data,
+                                                                    l.secure_data ) }">
+            <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00008', 'Record not written to OrderPayments table.' ) }">
+        </MvIF>
+        <MvCOMMENT> --- record checkout to bread services.  If this fails, continue as normal since authorization succeeded to get here --- </MvCOMMENT>
+        <MvASSIGN NAME="l.record_checkout_response" VALUE="{ bread_record_checkout(module, breadpay_transaction_id, total) }">
+
+        <MvFUNCRETURN VALUE="{ 1 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.jsonResponse }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="bread_settle" PARAMETERS="module var, breadpay_transaction_id, order_id, module_id, amount" STANDARDOUTPUTLEVEL="text" >
+    <MvCOMMENT>
+        /**
+         * https://platform-docs.breadpayments.com/bread-developers/reference/settletransaction
+         *
+         * settle (same as capture) an authorization. you can't partially settle - it's always for the full amount
+         */
+    </MvCOMMENT>
+
+    <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Load_RefNum_Module( l.order_id, l.module_id, l.orderpayments ) OR
+                    NOT [ g.Module_Library_DB ].Module_Load_ID( l.module_id, l.module ) }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00027', g.Error_Message ) }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.orderpayment" VALUE="{ l.orderpayments[1] }">
+    <MvIF EXPR = "{ ( l.orderpayment:type NE 1 ) AND ( l.orderpayment:type NE 3 ) }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00028', 'Cannot perform a capture on this transaction type.' ) }">
+    </MvIF>
+
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvIF EXPR="{ NOT ISNULL l.breadpay_transaction_id }">
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+        <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ ' "amount":' $ asciichar(123) $ ' "value":' $ rnd(l.amount * 100, 0) $ ', "currency": "USD" ' $ asciichar(125) $ ' ' $ asciichar(125)    }">
+        <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/transaction/' $ l.breadpay_transaction_id $ '/settle' }">
+        <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+        <MvCALL ACTION="{ l.breadurl }"
+                    METHOD="RAW"
+                    FIELDS="l.json"
+                    HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+            <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+        </MvCALL>
+        <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, l.BreadResponse) }">
+
+        <MvIF EXPR="{ l.BreadResponse:status EQ 'SETTLED' OR (l.BreadResponse:status EQ 'PARTIALLY_REFUNDED') }">
+            <MvCOMMENT> --- update available amount in auth payment. settle is always for full amount so update to 0 --- </MvCOMMENT>
+            <MvASSIGN NAME="l.orderpayment" MEMBER="available" VALUE="{ 0 }">
+            <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Update_Amounts(l.orderpayment) }">
+                <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00029', g.Error_Message ) }">
+            </MvIF>
+
+            <MvCOMMENT> --- add a delayed capture payment record --- </MvCOMMENT>
+            <MvASSIGN NAME="l.pay_data" MEMBER="breadpay_transaction_id" VALUE="{ l.breadpay_transaction_id }">
+            <MvASSIGN NAME="l.pay_data" MEMBER="breadpay_transaction_type" VALUE="{ l.BreadResponse:productType }">
+            <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Create( l.orderpayment:order_id,
+                                                                        l.orderpayment:id,
+                                                                        4,
+                                                                        l.orderpayment:order_id,
+                                                                        l.amount,
+                                                                        l.amount,
+                                                                        l.module:id,
+                                                                        l.pay_data,
+                                                                        l.secure_data ) }">
+                <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00013', g.Error_Message ) }">
+            </MvIF>
+
+        <MvELSE>
+            <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00030', 'Bread error: ' $ l.BreadResponse ) }">
+        </MvIF>
+    <MvELSE>
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Capture failed; no Bread transaction id found in authorization record.' }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+
+    <MvFUNCRETURN VALUE="1">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="bread_set_order_id" PARAMETERS="module var, breadpay_transaction_id, order_id" STANDARDOUTPUTLEVEL="text" >
+    <MvCOMMENT>
+        /**
+         * https://platform-docs.breadpayments.com/bread-developers/reference/updatetransaction
+         *
+         * add order_id to bread merchant portal
+         */
+    </MvCOMMENT>
+
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvIF EXPR="{ NOT ISNULL l.breadpay_transaction_id }">
+        <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ ' "externalID": "' $ l.order_id $ '"' $ asciichar(125) }">
+        <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/transaction/' $ l.breadpay_transaction_id }">
+        <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+        <MvCALL ACTION="{ l.breadurl }"
+                    METHOD="PATCH"
+                    FIELDS="l.json"
+                    HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+            <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+        </MvCALL>
+        <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, l.BreadResponse) }">
+    <MvELSE>
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Capture failed; no Bread transaction id found in authorization record.' }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+
+    <MvFUNCRETURN VALUE="1">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Runtime_Authorize" PARAMETERS="module var, code, total" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="">
+    <MvIF EXPR="{ NOT ISNULL g.breadpay_transaction_id }">
+        <MvASSIGN NAME="l.ok" VALUE="{ bread_authorize(module, g.breadpay_transaction_id, total) }">
+        <MvIF EXPR="{ l.ok EQ 0 }">
+            <MvASSIGN NAME="l.error_message" VALUE="{ 'Your payment did not go through. Please try again or use a different method of payment.' }">
+            <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+            <MvFUNCRETURN VALUE="{ 0 }">
+        </MvIF>
+
+        <MvASSIGN NAME="l.ok" VALUE="{ bread_set_order_id(module, g.breadpay_transaction_id, g.Basket:order_id) }">
+
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+        <MvIF EXPR="{ l.options:settlement_mode EQ 'checkout' }">
+            <MvASSIGN NAME="l.ok" VALUE="{ bread_settle(module, g.breadpay_transaction_id, g.Basket:order_id, l.module:id, l.total) }">
+        </MvIF>
+        <MvFUNCRETURN VALUE="{ l.ok }">
+    <MvELSE>
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Your payment did not go through. Please try again or use a different method of payment.' }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_OrderPayment_Capture" PARAMETERS="module var, order var, auth_payment var, auth_pay_data var, auth_secure_data var, amount" STANDARDOUTPUTLEVEL="">
+    <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+    <MvIF EXPR="{ NOT ISNULL l.auth_pay_data:breadpay_transaction_id }">
+        <MvASSIGN NAME="l.ok" VALUE="{ bread_settle(module, l.auth_pay_data:breadpay_transaction_id, l.auth_payment:order_id, l.auth_payment:pay_id, amount) }">
+        <MvFUNCRETURN VALUE="{ l.ok }">
+    <MvELSE>
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Capture failed; no Bread transaction id found in authorization record.' }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Authorize" PARAMETERS="module var, code, order var, amount" STANDARDOUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE="{ 0 }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Head" PARAMETERS="module var, tab, order var" STANDARDOUTPUTLEVEL="text,html">
+	<MvCOMMENT>
+		API: 5.70
+		This function allows the module to output content in the HTML <head> tag of the Legacy Order
+		Processing and new Order Management tab screens. It is useful for outputting CSS styles or
+		external JavaScript references.
+	</MvCOMMENT>
+
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_OrderPayment_Refund" PARAMETERS="module var, order var, capture_payment var, capture_pay_data var, capture_secure_data var, amount" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        /**
+         * https://platform-docs.breadpayments.com/bread-developers/reference/refundtransaction
+         *
+         * settle (same as capture) an authorization. you can't partially settle - it's always for the full amount
+         */
+    </MvCOMMENT>
+
+    <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].Module_Load_ID( l.capture_payment:pay_id, l.module ) }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00010', g.Error_Message ) }">
+    </MvIF>
+
+    <MvCOMMENT> --- we can only refund a sale or a delayed capture --- </MvCOMMENT>
+    <MvIF EXPR = "{ (l.capture_payment:type NE 2) AND (l.capture_payment:type NE 4) AND (l.capture_payment:type NE 5) }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00011', 'Invalid transaction type' ) }">
+    </MvIF>
+
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvIF EXPR="{ NOT ISNULL l.capture_pay_data:breadpay_transaction_id }">
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+        <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ ' "amount":' $ asciichar(123) $ ' "value":' $ rnd(l.amount * 100, 0) $ ', "currency": "USD" ' $ asciichar(125) $ ' ' $ asciichar(125)    }">
+        <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/transaction/' $ l.capture_pay_data:breadpay_transaction_id $ '/refund' }">
+        <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+        <MvCALL ACTION="{ l.breadurl }"
+                    METHOD="RAW"
+                    FIELDS="l.json"
+                    HEADERS="{ 'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+            <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+        </MvCALL>
+        <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, l.BreadResponse) }">
+
+        <MvCOMMENT> --- returns REFUNDED if completely refunded, or SETTLED if partially refunded --- </MvCOMMENT>
+        <MvIF EXPR="{ (l.BreadResponse:status EQ 'REFUNDED') OR (l.BreadResponse:status EQ 'SETTLED') OR (l.BreadResponse:status EQ 'PARTIALLY_REFUNDED') OR (l.BreadResponse:status EQ 'PARTIALLY_SETTLED') }">
+
+            <MvCOMMENT> --- add a refund payment payment record and update available capture amount --- </MvCOMMENT>
+            <MvASSIGN NAME = "l.capture_payment:available" VALUE = "{ l.capture_payment:available - l.amount }">
+            <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Update_Amounts( l.capture_payment ) }">
+                <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00032', 'Could not update capture amount' ) }">
+            </MvIF>
+            <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Create( l.order:id,
+                                                                        l.capture_payment:id,
+                                                                        6,
+                                                                        l.capture_payment:order_id,
+                                                                        l.amount,
+                                                                        l.amount,
+                                                                        l.module:id,
+                                                                        l.capture_pay_data,
+                                                                        l.capture_secure_data ) }">
+                <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00013', g.Error_Message ) }">
+            </MvIF>
+
+        <MvELSE>
+            <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00024', 'Bread error: ' $ l.BreadResponse ) }">
+        </MvIF>
+    <MvELSE>
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Capture failed; no Bread transaction id found in capture record.' }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+
+    <MvFUNCRETURN VALUE="1">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_OrderPayment_VOID" PARAMETERS="module var, order var, auth_payment var, auth_pay_data var, auth_secure_data var, amount" STANDARDOUTPUTLEVEL="">
+    <MvCOMMENT>
+        /**
+         * https://platform-docs.breadpayments.com/bread-developers/reference/canceltransaction
+         *
+         * void an authorization. you can do a partial void
+         */
+    </MvCOMMENT>
+
+    <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Load_ID( l.auth_payment:id, l.orderpayment ) OR
+                    NOT [ g.Module_Library_DB ].Order_Load_ID( l.auth_payment:order_id, l.order ) OR
+                    NOT [ g.Module_Library_DB ].Module_Load_ID( l.auth_payment:pay_id, l.module ) }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00010', g.Error_Message ) }">
+    </MvIF>
+
+    <MvIF EXPR = "{ l.orderpayment:type EQ 7 }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00011', 'Invalid transaction type' ) }">
+    </MvIF>
+
+    <MvCOMMENT> --- throw an error if there is already an associated capture record tied to this authorization record --- </MvCOMMENT>
+    <MvOPENVIEW NAME    = "Merchant"
+                VIEW     = "BreadOrderPaymentCaptures"
+                QUERY     = "{ 'SELECT * FROM ' $ g.Store_Table_Prefix $ 'OrderPayments WHERE parent_id = ? and type in (2, 4, 5)' }"
+                FIELDS    = "l.orderpayment:id">
+    <MvIF EXPR = "{ g.MvOPENVIEW_Error }">
+        <MvFUNCTIONRETURN VALUE = "{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00011', g.MvOPENVIEW_Error ) }">
+    </MvIF>
+    <MvIF EXPR="{ NOT BreadOrderPaymentCaptures.d.EOF }">
+        <MvFUNCTIONRETURN VALUE = "{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00011', 'This authorization has already been captured.' ) }">
+    </MvIF>
+    <MvCLOSEVIEW NAME="Merchant" VIEW="BreadOrderPaymentCaptures">
+
+    <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+    <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    <MvELSE>
+        <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+    </MvIF>
+
+    <MvIF EXPR="{ NOT ISNULL l.auth_pay_data:breadpay_transaction_id }">
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+        <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ ' "amount":' $ asciichar(123) $ ' "value":' $ rnd(l.amount * 100, 0) $ ', "currency": "USD" ' $ asciichar(125) $ ' ' $ asciichar(125)    }">
+        <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/transaction/' $ l.auth_pay_data:breadpay_transaction_id $ '/cancel' }">
+        <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+        <MvCALL ACTION="{ l.breadurl }"
+                    METHOD="RAW"
+                    FIELDS="l.json"
+                    HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+            <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+        </MvCALL>
+        <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, l.BreadResponse) }">
+
+        <MvCOMMENT> --- returns AUTHORIZED if partially refunded, or CANCELED if completely refunded. Documentation says CANCELLED instead of CANCELED --- </MvCOMMENT>
+        <MvIF EXPR="{ (l.BreadResponse:status EQ 'AUTHORIZED') OR (l.BreadResponse:status EQ 'CANCELED') OR (l.BreadResponse:status EQ 'CANCELLED') }">
+
+            <MvCOMMENT> --- add a void payment payment record --- </MvCOMMENT>
+            <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Create( l.orderpayment:order_id,
+                                                                        l.orderpayment:id,
+                                                                        7,
+                                                                        l.orderpayment:order_id,
+                                                                        l.amount,
+                                                                        0,
+                                                                        l.module:id,
+                                                                        l.pay_data,
+                                                                        l.secure_data ) }">
+                <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00013', g.Error_Message ) }">
+            </MvIF>
+
+        <MvELSE>
+            <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00024', 'Bread error: ' $ l.parsedResponse:respmsg ) }">
+        </MvIF>
+    <MvELSE>
+        <MvASSIGN NAME="l.error_message" VALUE="{ 'Void failed; no Bread transaction id found in authorization record.' }">
+        <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+        <MvFUNCRETURN VALUE="{ 0 }">
+    </MvIF>
+
+    <MvFUNCRETURN VALUE="1">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Tabs" PARAMETERS="module var" STANDARDOUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE="BREADFINANCIAL:Bread Pay">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Report_Description" PARAMETERS="module var, data" STANDARDOUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE="{ trim( l.module:name ) }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Content" PARAMETERS="module var, tab, load_fields, data, secure_data" STANDARDOUTPUTLEVEL="text, html, compresswhitespace" ERROROUTPUTLEVEL="">
+    <MvCOMMENT> --- This displays on the order processing page --- </MvCOMMENT>
+    <MvIF EXPR="{ l.tab EQ 'BREADFINANCIAL' }">
+        <table border=0 cellpadding=2 cellspacing=0 width="100%">
+            <tr>
+                <td nowrap><b>Bread Transaction ID:</b></td>
+                <td width="100%"><MvEVAL EXPR="{ l.data:breadpay_transaction_id }"></td>
+            </tr>
+            <tr>
+                <td nowrap><b>Bread Transaction Type:</b></td>
+                <td width="100%"><MvEVAL EXPR="{ l.data:breadpay_transaction_type }"></td>
+            </tr>
+        </table>
+    </MvIF>
+
+    <MvFUNCRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Validate" PARAMETERS="module var" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Update" PARAMETERS="module var, data var, secure_data var" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Delete" PARAMETERS="module var, data var, secure_data var" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Report_Fields" PARAMETERS="module var,data,secure_data" STANDARDOUTPUTLEVEL="">
+    <MvIF EXPR="{ len(trim(l.data:breadpay_transaction_id)) GT 0 }">
+        <MvASSIGN NAME="l.fields" VALUE="{ l.fields $ 'breadpay_transaction_id,' }">
+        <MvASSIGN NAME="l.fields" VALUE="{ l.fields $ 'breadpay_transaction_type,' }">
+    </MvIF>
+    <MvASSIGN NAME="l.fields" VALUE="{ substring(l.fields,1,len(l.fields)-1) }">
+    <MvFUNCRETURN VALUE="{ l.fields }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Report_Label" PARAMETERS="module var,field_id" STANDARDOUTPUTLEVEL="">
+    <MvIF EXPR="{ l.field_id EQ 'breadpay_transaction_id' }">
+        <MvFUNCRETURN VALUE="Bread Transaction ID:">
+    </MvIF>
+    <MvIF EXPR="{ l.field_id EQ 'breadpay_transaction_type' }">
+        <MvFUNCRETURN VALUE="Bread Transaction Type:">
+    </MvIF>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Report_Value" PARAMETERS="module var,field_id,data,secure_data" STANDARDOUTPUTLEVEL="">
+    <MvIF EXPR="{ l.field_id EQ 'breadpay_transaction_id' }">
+        <MvFUNCRETURN VALUE="{ l.data:breadpay_transaction_id }">
+    </MvIF>
+    <MvIF EXPR="{ l.field_id EQ 'breadpay_transaction_type' }">
+        <MvFUNCRETURN VALUE="{ l.data:breadpay_transaction_type }">
+    </MvIF>
+    <MvFUNCTIONRETURN VALUE="">
+</MvFUNCTION>
+
+
+
+
+
+<MvFUNCTION NAME="PaymentModule_Order_Authorize_Field" PARAMETERS="module var,order var,pay_data,field_id" STANDARDOUTPUTLEVEL="text,html,compresswhitespace">
+    <MvFUNCTIONRETURN VALUE=1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Authorize_Prompt" PARAMETERS="module var,order var,pay_data,field_id" STANDARDOUTPUTLEVEL="">
+    <MvFUNCTIONRETURN VALUE="">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Authorize_Fields" PARAMETERS="module var,order var,pay_data" STANDARDOUTPUTLEVEL="">
+    <MvFUNCTIONRETURN VALUE="">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="PaymentModule_Order_Authorize_Methods" PARAMETERS="module var,order var,methods var" STANDARDOUTPUTLEVEL="">
+    <MvFUNCRETURN VALUE="{ 0 }">
+</MvFUNCTION>
+
+
+<MvCOMMENT>
+----------------------------------------------------------------------------------------------------------
+component feature
+----------------------------------------------------------------------------------------------------------
+</MvCOMMENT>
+
+
+
+
+
+
+
+
+<MvFUNCTION NAME = "ComponentModule_Initialize" PARAMETERS = "module var, item, all_settings var, settings var" STANDARDOUTPUTLEVEL = "" ERROROUTPUTLEVEL = "">
+	<MvIF EXPR = "{ l.item EQ 'breadpay' }">					<MvFUNCTIONRETURN VALUE = 1>
+	</MvIF>
+
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Render_Start" PARAMETERS = "module var, item, settings var, item_settings var, param" STANDARDOUTPUTLEVEL = "">
+    <MvASYNCHRONOUS>
+        <MvASSIGN name="l.ok" value="{ bread_load_settings(module) }">
+    </MvASYNCHRONOUS>
+
+	<MvIF EXPR = "{ l.param EQ 'bread_data' }">
+        <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+        <MvASSIGN NAME = "l.settings:bread_cart_size_filter_enabled" VALUE = "{ l.options:cart_size_filter_enabled }">
+        <MvASSIGN NAME = "l.settings:bread_min_cart" VALUE = "{ l.options:min_cart }">
+        <MvASSIGN NAME = "l.settings:bread_max_cart" VALUE = "{ l.options:max_cart }">
+        <MvASSIGN NAME = "l.settings:bread_sku_filter" VALUE = "{ l.options:sku_filter }">
+        <MvASSIGN NAME = "l.settings:bread_sku_filter_mode" VALUE = "{ l.options:sku_filter_mode }">
+	</MvIF>
+	<MvFUNCTIONRETURN>
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Render_End" PARAMETERS = "module var, item, all_settings var, settings var, param" STANDARDOUTPUTLEVEL = "">
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Tabs" PARAMETERS = "module var, item, settings var" STANDARDOUTPUTLEVEL = "">
+	<MvFUNCTIONRETURN VALUE = "">
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Content" PARAMETERS = "module var, item, tab, load_fields, field_prefix, fields var, settings var" STANDARDOUTPUTLEVEL = "">
+	<MvIF EXPR = "{ l.item EQ 'breadpay' }"> <MvFUNCTIONRETURN VALUE = "{ ComponentModule_Content_BreadPay( l.module, l.item, l.tab, l.load_fields, l.field_prefix, l.fields, l.settings ) }">
+	</MvIF>
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Content_BreadPay" PARAMETERS = "module var, item var, tab var, load_fields var, field_prefix var, fields var, settings var" STANDARDOUTPUTLEVEL = "text, html, compresswhitespace">
+		<MvEVAL EXPR = "{ [ g.Module_Admin ].DrawGroupTabEntry_Start( 'GT_PAGE', l.item ) }">
+		<MvEVAL EXPR = "{ [ g.Module_Admin ].DrawGroupTabEntry_End() }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Defaults" PARAMETERS = "module var, settings var" STANDARDOUTPUTLEVEL = "">
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="ComponentModule_Validate" PARAMETERS="module var, item, field_prefix, fields var" STANDARDOUTPUTLEVEL="">
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME="ComponentModule_Update" PARAMETERS="module var, item, field_prefix, fields var, settings var" STANDARDOUTPUTLEVEL="" ERROROUTPUTLEVEL = "">
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Page_Assign" PARAMETERS = "module var, page var, item, settings var" STANDARDOUTPUTLEVEL = "">
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+<MvFUNCTION NAME = "ComponentModule_Page_Unassign" PARAMETERS = "module var, page var, item, settings var" STANDARDOUTPUTLEVEL = "">
+	<MvFUNCTIONRETURN VALUE = 1>
+</MvFUNCTION>
+
+
+
+
+
+<MvCOMMENT>
+----------------------------------------------------------------------------------------------------------
+database functions
+----------------------------------------------------------------------------------------------------------
+</MvCOMMENT>
+
+<MvFUNCTION NAME="Global_Load" PARAMETERS="module, options var" STANDARDOUTPUTLEVEL="text, html, compresswhitespace">
+    <MvCOMMENT> sync settings with Bread first if needed
+    <MvASSIGN name="l.ok" value="{ bread_load_settings(module) }">
+    </MvCOMMENT>
+    <MvOPENVIEW NAME="Merchant"
+                VIEW="BREAD_Global"
+                QUERY="{ 'SELECT * FROM ' $ g.Store_Table_Prefix $ l.module:code $ '_Global' }">
+    <MvIF EXPR="{ g.MvOPENVIEW_Error }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00014', g.MvOPENVIEW_Error ) - 1 }">
+    </MvIF>
+
+    <MvASSIGN NAME="l.ok" VALUE=1>
+    <MvIF EXPR="{ NOT BREAD_Global.d.EOF }">
+        <MvASSIGN NAME="l.options" MEMBER="production"               VALUE="{ BREAD_Global.d.production }">
+        <MvASSIGN NAME="l.options" MEMBER="apikey"                   VALUE="{ BREAD_Global.d.apikey }">
+        <MvASSIGN NAME="l.options" MEMBER="secretkey"                VALUE="{ [ g.Module_Library_Crypto ].Decrypt_Payment_Password(BREAD_Global.d.secretkey) }">
+        <MvASSIGN NAME="l.options" MEMBER="integrationkey"           VALUE="{ BREAD_Global.d.integrationkey }">
+        <MvASSIGN NAME="l.options" MEMBER="sandboxapikey"            VALUE="{ BREAD_Global.d.sandboxapikey }">
+        <MvASSIGN NAME="l.options" MEMBER="sandboxsecretkey"         VALUE="{ [ g.Module_Library_Crypto ].Decrypt_Payment_Password(BREAD_Global.d.sandboxsecretkey) }">
+        <MvASSIGN NAME="l.options" MEMBER="sandboxintegrationkey"    VALUE="{ BREAD_Global.d.sandboxintegrationkey }">
+        <MvASSIGN NAME="l.options" MEMBER="settlement_mode"          VALUE="{ BREAD_Global.d.settlement_mode }">
+        <MvASSIGN NAME="l.options" MEMBER="min_cart"                 VALUE="{ BREAD_Global.d.min_cart }">
+        <MvASSIGN NAME="l.options" MEMBER="max_cart"                 VALUE="{ BREAD_Global.d.max_cart }">
+        <MvASSIGN NAME="l.options" MEMBER="sku_filter"               VALUE="{ BREAD_Global.d.sku_filter }">
+        <MvASSIGN NAME="l.options" MEMBER="sku_filter_mode"          VALUE="{ BREAD_Global.d.sku_filter_mode }">
+        <MvASSIGN NAME="l.options" MEMBER="cart_size_filter_enabled" VALUE="{ BREAD_Global.d.cart_size_filter_enabled }">
+        <MvASSIGN NAME="l.options" MEMBER="last_sync_time"           VALUE="{ BREAD_Global.d.last_sync_time }">
+    <MvELSE>
+        <MvASSIGN NAME="l.ok" VALUE=0>
+    </MvIF>
+
+    <MvCLOSEVIEW NAME="Merchant" VIEW="BREAD_Global">
+    <MvFUNCRETURN VALUE="{ l.ok }">
+</MvFUNCTION>
+
+<MvFUNCTION NAME="Global_Update" PARAMETERS="module, options var" STANDARDOUTPUTLEVEL="text, html, compresswhitespace">
+    <MvQUERY NAME    = "Merchant"
+             QUERY    = "{ 'UPDATE ' $ g.Store_Table_Prefix $ l.module:code $ '_Global
+                            SET     production               = ?,
+                                    apikey                   = ?,
+                                    secretkey                = ?,
+                                    integrationkey           = ?,
+                                    sandboxapikey            = ?,
+                                    sandboxsecretkey         = ?,
+                                    sandboxintegrationkey    = ?,
+                                    settlement_mode          = ?,
+                                    min_cart                 = ?,
+                                    max_cart                 = ?,
+                                    sku_filter               = ?,
+                                    sku_filter_mode          = ?,
+                                    cart_size_filter_enabled = ?,
+                                    last_sync_time           = ?' }"
+             FIELDS    = "l.options:production, l.options:apikey, l.options:secretkey, l.options:integrationkey,
+                          l.options:sandboxapikey, l.options:sandboxsecretkey, l.options:sandboxintegrationkey,
+                          l.options:settlement_mode, l.options:min_cart, l.options:max_cart, l.options:sku_filter,
+                          l.options:sku_filter_mode, l.options:cart_size_filter_enabled, s.time_t">
+    <MvIF EXPR="{ g.MvQUERY_Error }">
+        <MvFUNCRETURN VALUE="{ [ g.Module_Library_Utilities ].Error( 'BREAD-ERROR-00015', g.MvQUERY_Error ) }">
+    </MvIF>
+
+    <MvFUNCRETURN VALUE="1">
+</MvFUNCTION>
+
+<MvCOMMENT>
+----------------------------------------------------------------------------------------------------------
+shipping functions
+----------------------------------------------------------------------------------------------------------
+</MvCOMMENT>
+
+<MvFUNCTION NAME="Module_Notify_OrderShipment_StatusChange" PARAMETERS="module var, orderreturn_count, original_orderreturns var, orderreturns var" STANDARDOUTPUTLEVEL="">
+    <MvFOREACH ITERATOR="l.orderreturn" ARRAY="l.orderreturns">
+        <MvIF EXPR = "{ NOT [ g.Module_Library_DB ].OrderPayment_Load_RefNum_Module( l.orderreturn:order_id, l.module:id, l.orderpayments ) }">
+            <MvFUNCTIONRETURN>
+        </MvIF>
+        <MvASSIGN NAME="l.orderpayment" VALUE="{ l.orderpayments[1] }">
+
+        <MvCOMMENT>For some reason, miva saves breadpay_transaction_id as a string rather than a member, even though we explicitly assigned a member up above....</MvCOMMENT>
+        <MvASSIGN NAME="l.pay_data" VALUE="{ l.orderpayment:pay_data }">
+        <MvASSIGN NAME="l.ok" VALUE="{ miva_splitstring(l.orderpayment:pay_data, '=', l.breadpay_transaction_id, '') }">
+        <MvASSIGN NAME="l.breadpay_transaction_id" VALUE="{ l.breadpay_transaction_id[2] }">
+
+        <MvIF EXPR="{ NOT ISNULL l.breadpay_transaction_id AND NOT ISNULL l.orderreturn:tracktype AND NOT ISNULL l.orderreturn:tracknum }">
+            <MvASSIGN name="l.token_response" value="{ get_bread_auth_token(module, 'false') }">
+            <MvIF EXPR="{ l.token_response:success NE 'ok' }">
+                <MvASSIGN NAME="l.error_message" VALUE="{ 'Error: ' $ l.token_response }">
+                <MvEVAL EXPR="{ [ g.Module_Library_Utilities ].Message_Error( l.error_message ) }">
+                <MvFUNCRETURN VALUE="{ 0 }">
+            <MvELSE>
+                <MvASSIGN NAME="l.token" VALUE="{ l.token_response:token }">
+            </MvIF>
+
+            <MvASSIGN NAME="l.json" VALUE="{ asciichar(123) $ ' "carrier": "' $ l.orderreturn:tracktype $ '", "trackingNumber": "' $ l.orderreturn:tracknum $ '"' $ asciichar(125) }">
+            <MvASSIGN NAME="l.breadurl" VALUE="{ 'https://' $ get_bread_hostname(module, 'false') $ '/api/transaction/' $ l.breadpay_transaction_id $ '/fulfillment' }">
+            <MIVA MvCALL_ERROR="nonfatal, nodisplay">
+            <MvCALL ACTION="{ l.breadurl }"
+                        METHOD="RAW"
+                        FIELDS="l.json"
+                        HEADERS="{    'Authorization: Bearer ' $ l.token $ asciichar(13) $ asciichar(10) }">
+                <MvASSIGN NAME="l.jsonResponse" VALUE="{ l.jsonResponse $ callvalue }">
+            </MvCALL>
+            <MvASSIGN NAME="l.ok" VALUE="{ miva_json_decode(l.jsonResponse, l.BreadResponse) }">
+
+            <MvASSIGN NAME="l.ok" VALUE="{ Global_Load(l.module, l.options) }">
+            <MvIF EXPR = "{ ( ( l.orderpayment:type EQ 1 ) OR ( l.orderpayment:type EQ 3 ) ) AND l.options:settlement_mode EQ 'capture' }">
+                <MvASSIGN NAME="l.ok" VALUE="{ bread_settle(module, l.breadpay_transaction_id, l.orderpayment:order_id, l.module:id, l.orderpayment:amount) }">
+            </MvIF>
+        </MvIF>
+    </MvFOREACH>
+
+	<MvFUNCTIONRETURN>
+</MvFUNCTION>
+
+<MvCOMMENT>
+----------------------------------------------------------------------------------------------------------
+module functions
+----------------------------------------------------------------------------------------------------------
+</MvCOMMENT>
+
+<MvFUNCTION NAME="writeLn" PARAMETERS="file,line" STANDARDOUTPUTLEVEL="">
+    <MvASSIGN NAME="l.null" VALUE="">
+    <MvEXPORT FILE="{ l.file }" FIELDS="l.null,l.null" DELIMITER="{ l.line }">
+</MVFUNCTION>
